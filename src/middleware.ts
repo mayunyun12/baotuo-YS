@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-// ⚠️ 确保这个路径是正确的，用于获取认证信息的工具函数
+// ⚠️ 请根据您项目的实际路径进行调整
 import { getAuthInfoFromCookie } from '@/lib/auth';
 
 // ===============================================================
@@ -11,23 +11,27 @@ import { getAuthInfoFromCookie } from '@/lib/auth';
 
 /**
  * 【核心修复】通过内部 API 路由检查用户的实时授权状态。
- * 这个 API 路由将执行 DB 查询，以绕过 Edge Runtime 的缓存问题。
+ * 使用 Cache Buster (时间戳) 来强制绕过所有 Edge 缓存。
  * @param username 用户名
  * @param request NextRequest 对象
  * @returns Promise<boolean> 授权检查是否通过
  */
 async function checkUserAuthorization(username: string, request: NextRequest): Promise<boolean> {
-    // 构造内部 API 路由 URL。您需要确保创建 /api/auth/status 路由。
-    const authStatusUrl = new URL(`/api/auth/status?username=${username}`, request.url);
+    // 增加一个 Cache Buster (时间戳)，确保每次请求 URL 都不同
+    const cacheBuster = Date.now(); 
+    
+    // 构造内部 API 路由 URL，包含用户名和时间戳
+    const authStatusUrl = new URL(`/api/auth/status?username=${username}&_t=${cacheBuster}`, request.url);
 
     try {
         const response = await fetch(authStatusUrl.toString(), {
             method: 'GET',
-            // 明确禁用 Edge Runtime 缓存，即使内部 API 也在 Edge 上也尽量避免缓存
+            // 明确禁用 Edge Runtime 缓存
             cache: 'no-store', 
-            // 转发 Cookie，以备 API 路由需要再次验证身份
+            // 确保不携带任何可能导致缓存的头信息
             headers: {
                 'Cookie': request.headers.get('cookie') || '',
+                'Cache-Control': 'no-cache, no-store, must-revalidate', // 额外的防缓存头
             }
         });
 
@@ -36,7 +40,6 @@ async function checkUserAuthorization(username: string, request: NextRequest): P
             return true;
         } else if (response.status === 403 || response.status === 404) {
             // 用户被封禁或删除，授权失败
-            console.warn(`[AuthZ] User ${username} check via API failed: ${response.status}`);
             return false;
         } else {
             // 其他错误（如 500），出于安全考虑返回失败
@@ -46,11 +49,9 @@ async function checkUserAuthorization(username: string, request: NextRequest): P
 
     } catch (error) {
         console.error('[AuthZ] Failed to connect to internal auth API:', error);
-        // 无法连接到授权 API，出于安全考虑返回失败
         return false;
     }
 }
-
 
 /**
  * 处理认证或授权失败的情况：清除 Cookie 并重定向到登录页。
@@ -90,7 +91,7 @@ function handleAuthFailure(
 }
 
 /**
- * 验证签名。此函数应与您项目的签名生成逻辑匹配。
+ * 验证签名。
  */
 async function verifySignature(
   data: string,
