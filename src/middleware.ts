@@ -2,20 +2,58 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
-// ⚠️ 请根据您项目的实际路径进行调整
+// ⚠️ 确保这个路径是正确的，用于获取认证信息的工具函数
 import { getAuthInfoFromCookie } from '@/lib/auth';
-import { db } from '@/lib/db'; 
 
 // ===============================================================
 // 辅助函数区域
 // ===============================================================
 
 /**
+ * 【核心修复】通过内部 API 路由检查用户的实时授权状态。
+ * 这个 API 路由将执行 DB 查询，以绕过 Edge Runtime 的缓存问题。
+ * @param username 用户名
+ * @param request NextRequest 对象
+ * @returns Promise<boolean> 授权检查是否通过
+ */
+async function checkUserAuthorization(username: string, request: NextRequest): Promise<boolean> {
+    // 构造内部 API 路由 URL。您需要确保创建 /api/auth/status 路由。
+    const authStatusUrl = new URL(`/api/auth/status?username=${username}`, request.url);
+
+    try {
+        const response = await fetch(authStatusUrl.toString(), {
+            method: 'GET',
+            // 明确禁用 Edge Runtime 缓存，即使内部 API 也在 Edge 上也尽量避免缓存
+            cache: 'no-store', 
+            // 转发 Cookie，以备 API 路由需要再次验证身份
+            headers: {
+                'Cookie': request.headers.get('cookie') || '',
+            }
+        });
+
+        // 期待 API 路由在用户正常时返回 200，在被封禁/删除时返回 403/404
+        if (response.ok) {
+            return true;
+        } else if (response.status === 403 || response.status === 404) {
+            // 用户被封禁或删除，授权失败
+            console.warn(`[AuthZ] User ${username} check via API failed: ${response.status}`);
+            return false;
+        } else {
+            // 其他错误（如 500），出于安全考虑返回失败
+            console.error(`[AuthZ] API Error for user ${username}: ${response.status}`);
+            return false;
+        }
+
+    } catch (error) {
+        console.error('[AuthZ] Failed to connect to internal auth API:', error);
+        // 无法连接到授权 API，出于安全考虑返回失败
+        return false;
+    }
+}
+
+
+/**
  * 处理认证或授权失败的情况：清除 Cookie 并重定向到登录页。
- * * @param request NextRequest 对象
- * @param pathname 当前路径
- * @param reason 失败原因
- * @returns NextResponse 对象，用于重定向或返回 401/403
  */
 function handleAuthFailure(
     request: NextRequest,
@@ -26,8 +64,7 @@ function handleAuthFailure(
 
     // 如果是 API 路由，返回 401/403 JSON 响应
     if (pathname.startsWith('/api')) {
-        // 如果失败原因是封禁/权限不足，返回 403；否则返回 401
-        const status = reason.includes('banned') || reason.includes('forbidden') ? 403 : 401;
+        const status = reason.includes('banned') || reason.includes('forbidden') || reason.includes('Authorization Failed') ? 403 : 401;
         return new NextResponse(reason, { status: status });
     }
 
@@ -122,7 +159,6 @@ export async function middleware(request: NextRequest) {
     const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
 
     if (!process.env.PASSWORD) {
-        // 如果没有设置密码，重定向到警告页面
         const warningUrl = new URL('/warning', request.url);
         return NextResponse.redirect(warningUrl);
     }
@@ -130,35 +166,16 @@ export async function middleware(request: NextRequest) {
     // 2. 从cookie获取认证信息
     const authInfo = getAuthInfoFromCookie(request);
 
-    // 检查是否有基本认证信息和用户名
     if (!authInfo || !authInfo.username) {
         return handleAuthFailure(request, pathname, 'No valid auth info or username found');
     }
 
-    // 3. 实时授权检查 (Edge DB 核心逻辑)
-    try {
-        // --- 3.1 校验用户是否存在（是否已被删除）---
-        const exists = await db.isUserExist?.(authInfo.username); 
-        if (!exists) {
-            return handleAuthFailure(request, pathname, 'User is deleted');
-        }
+    // 3. 【核心修复】实时授权检查：通过调用内部 API 路由
+    const isAuthorized = await checkUserAuthorization(authInfo.username, request);
 
-        // --- 3.2 校验用户是否被封禁 ---
-        const adminConfig = await db.getAdminConfig?.();
-        
-        if (adminConfig?.UserConfig?.Users) {
-            const u = adminConfig.UserConfig.Users.find(
-                (x: any) => x.username === authInfo.username
-            );
-            
-            if (u && u.banned) {
-                return handleAuthFailure(request, pathname, 'User is banned');
-            }
-        }
-    } catch (err) {
-        // DB 检查失败，拒绝访问以确保安全
-        console.error('Middleware user status check error:', err);
-        return handleAuthFailure(request, pathname, 'Server error during auth check');
+    if (!isAuthorized) {
+        // API 路由返回 403/404，表示用户已被封禁/删除
+        return handleAuthFailure(request, pathname, 'User is deleted or banned (Authorization Failed)');
     }
     
     // 4. 认证逻辑（在通过授权检查后进行）
@@ -195,10 +212,8 @@ export async function middleware(request: NextRequest) {
 // Config 配置
 // ===============================================================
 
-// 配置middleware匹配规则
 export const config = {
   matcher: [
-    // 匹配所有路径，除了排除列表中的
     '/((?!_next/static|_next/image|favicon.ico|login|warning|api/login|api/register|api/logout|api/cron|api/server-config).*)',
   ],
 };
