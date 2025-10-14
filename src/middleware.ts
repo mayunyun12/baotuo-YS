@@ -39,7 +39,7 @@ export async function middleware(request: NextRequest) {
       return logoutAndBlock(request, '/login');
     }
 
-    // 校验账号是否仍有效
+    // ✅ 去掉类型注解，防止 ESLint 报错
     const storageType = process.env.NEXT_PUBLIC_STORAGE_TYPE || 'localstorage';
 
     if (storageType === 'd1' || storageType === 'redis' || storageType === 'upstash') {
