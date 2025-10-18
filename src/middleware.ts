@@ -4,6 +4,51 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { getAuthInfoFromCookie } from '@/lib/auth';
 
+/**
+ * 极简热补丁：在已通过签名校验后，二次校验用户是否被封禁（banned）。
+ * - 通过 /api/server-config 读取用户配置（已在 matcher 中排除，避免递归）
+ * - 命中 banned：清除 auth Cookie，并对 API 返回 403，页面重定向至 /login
+ * - 软缓存 15s，避免每个请求都读取配置
+ */
+
+const BAN_CACHE_TTL = 15_000; // 15s
+let banCache: { at: number; set: Set<string> } | null = null;
+
+async function getBannedSet(request: NextRequest): Promise<Set<string>> {
+  if (banCache && Date.now() - banCache.at < BAN_CACHE_TTL) return banCache.set;
+
+  const url = new URL('/api/server-config', request.url);
+  const res = await fetch(url.toString(), { cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(`server-config unavailable: ${res.status}`);
+  }
+  const data = await res.json();
+  // 期望结构：{ UserConfig: { Users: [{ username, banned }, ...] } }
+  const users =
+    (data?.UserConfig?.Users as Array<any> | undefined) ||
+    (data?.Users as Array<any> | undefined) ||
+    (data?.users as Array<any> | undefined) ||
+    [];
+
+  const set = new Set<string>();
+  for (const u of users) {
+    const name = u?.username ?? u?.name ?? u?.userName;
+    const isBanned = u?.banned === true || u?.disabled === true || u?.status === 'banned';
+    if (name && isBanned) set.add(String(name));
+  }
+  banCache = { at: Date.now(), set };
+  return set;
+}
+
+function killAuthAndBlock(request: NextRequest, isApi: boolean) {
+  const res = isApi
+    ? new NextResponse('Forbidden', { status: 403 })
+    : NextResponse.redirect(new URL('/login', request.url));
+  // 强制清除 auth Cookie
+  res.cookies.set('auth', '', { path: '/', expires: new Date(0), sameSite: 'lax' });
+  return res;
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -32,6 +77,7 @@ export async function middleware(request: NextRequest) {
     if (!authInfo.password || authInfo.password !== process.env.PASSWORD) {
       return handleAuthFailure(request, pathname);
     }
+    // localstorage 模式无多用户概念，不再检查 banned
     return NextResponse.next();
   }
 
@@ -49,8 +95,17 @@ export async function middleware(request: NextRequest) {
       process.env.PASSWORD || ''
     );
 
-    // 签名验证通过即可
+    // 签名验证通过后，新增：banned 二次校验
     if (isValidSignature) {
+      try {
+        const bannedSet = await getBannedSet(request);
+        if (bannedSet.has(authInfo.username)) {
+          return killAuthAndBlock(request, pathname.startsWith('/api'));
+        }
+      } catch (e) {
+        // 为保证可用性，配置获取失败时放行（如需更安全，可切换为 fail-closed）
+        // return killAuthAndBlock(request, pathname.startsWith('/api'));
+      }
       return NextResponse.next();
     }
   }
@@ -85,12 +140,7 @@ async function verifySignature(
     );
 
     // 验证签名
-    return await crypto.subtle.verify(
-      'HMAC',
-      key,
-      signatureBuffer,
-      messageData
-    );
+    return await crypto.subtle.verify('HMAC', key, signatureBuffer, messageData);
   } catch (error) {
     console.error('签名验证失败:', error);
     return false;
@@ -98,10 +148,7 @@ async function verifySignature(
 }
 
 // 处理认证失败的情况
-function handleAuthFailure(
-  request: NextRequest,
-  pathname: string
-): NextResponse {
+function handleAuthFailure(request: NextRequest, pathname: string): NextResponse {
   // 如果是 API 路由，返回 401 状态码
   if (pathname.startsWith('/api')) {
     return new NextResponse('Unauthorized', { status: 401 });
@@ -136,4 +183,3 @@ export const config = {
     '/((?!_next/static|_next/image|favicon.ico|login|warning|api/login|api/register|api/logout|api/cron|api/server-config).*)',
   ],
 };
-
