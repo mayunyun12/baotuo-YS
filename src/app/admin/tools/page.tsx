@@ -2,9 +2,13 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Swal from 'sweetalert2';
 import PageLayout from '@/components/PageLayout';
+
+/** 运行时策略：强制动态渲染 + 不缓存，避免静态导出报错 */
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 /** 统一弹窗 */
 const toast = {
@@ -23,7 +27,7 @@ const toast = {
     }),
 };
 
-/** 更健壮的 fetch：不自动跟随 302，且校验 content-type */
+/** 更健壮的 fetch：不自动跟随 302，且校验 content-type 是 JSON */
 async function fetchJSON<T = any>(input: RequestInfo | URL, init?: RequestInit) {
   const res = await fetch(input, {
     cache: 'no-store',
@@ -69,7 +73,8 @@ type ValidateItem = {
   latency?: number; // ms
 };
 
-export default function Page() {
+/** —— 页面主体（内部组件） —— */
+function AdminToolsInner() {
   /** —— 订阅配置 —— */
   const [subUrl, setSubUrl] = useState('');
   const [subPreview, setSubPreview] = useState<any | null>(null);
@@ -422,5 +427,20 @@ export default function Page() {
         </div>
       </div>
     </PageLayout>
+  );
+}
+
+/** —— 页面默认导出：加上 Suspense 边界 —— */
+export default function AdminToolsPage() {
+  return (
+    <Suspense
+      fallback={
+        <PageLayout activePath="/admin">
+          <div className="p-6 text-sm text-gray-500">加载中…</div>
+        </PageLayout>
+      }
+    >
+      <AdminToolsInner />
+    </Suspense>
   );
 }
