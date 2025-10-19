@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, no-console */
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type ValidateResult = { key: string; name?: string; status: string };
 type LogEvent = { type: string; message: string; ts: number; extra?: any };
@@ -42,13 +42,17 @@ export default function AdminToolsPage() {
     try {
       const saved = localStorage.getItem('admin.tools.subscription.url');
       if (saved) setSubUrl(saved);
-    } catch {}
+    } catch (e) {
+      console.debug('restore subscription url failed', e);
+    }
   }, []);
 
   useEffect(() => {
     try {
       if (subUrl) localStorage.setItem('admin.tools.subscription.url', subUrl);
-    } catch {}
+    } catch (e) {
+      console.debug('persist subscription url failed', e);
+    }
   }, [subUrl]);
 
   // ---------- 数据导出 ----------
@@ -162,21 +166,29 @@ export default function AdminToolsPage() {
 
   // ---------- 日志 ----------
   const onReloadLogs = async () => {
+    setLoadingLogs(true);
     try {
-      setLoadingLogs(true);
       const data = await fetchJSON<LogEvent[]>('/api/admin/logs?limit=200', {
         cache: 'no-store',
       });
       setLogs(Array.isArray(data) ? data : []);
     } catch (e: any) {
       alert('获取日志失败：' + (e?.message || String(e)));
+      console.error(e);
     } finally {
       setLoadingLogs(false);
     }
   };
 
   useEffect(() => {
-    onReloadLogs().catch(() => {});
+    // 避免空箭头函数，且对错误进行记录
+    (async () => {
+      try {
+        await onReloadLogs();
+      } catch (e) {
+        console.error('initial logs load failed', e);
+      }
+    })();
   }, []);
 
   return (
@@ -202,13 +214,20 @@ export default function AdminToolsPage() {
             {exporting ? '导出中…' : '导出数据'}
           </button>
 
-          <label className="px-4 py-2 rounded bg-gray-100 border cursor-pointer">
-            选择导入 JSON
+          <label
+            className={cls(
+              'px-4 py-2 rounded border cursor-pointer',
+              importing ? 'bg-gray-200 text-gray-500 pointer-events-none' : 'bg-gray-100'
+            )}
+            title={importing ? '正在导入…' : '选择导入 JSON'}
+          >
+            选择导入 JSON {importing && <span className="ml-2 text-xs">(导入中…)</span>}
             <input
               ref={fileRef}
               type="file"
               accept="application/json"
               className="hidden"
+              disabled={importing}
               onChange={(e) => onImport(e.target.files?.[0])}
             />
           </label>
