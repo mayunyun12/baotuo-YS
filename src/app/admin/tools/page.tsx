@@ -1,368 +1,251 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, no-console */
+
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Swal from 'sweetalert2';
+import PageLayout from '@/components/PageLayout';
 
-type ValidateResult = { key: string; name?: string; status: string };
-type LogEvent = { type: string; message: string; ts: number; extra?: any };
+/** 统一弹窗 */
+const toast = {
+  ok: (msg: string) =>
+    Swal.fire({ icon: 'success', title: '成功', text: msg, timer: 1800, showConfirmButton: false }),
+  err: (msg: string) => Swal.fire({ icon: 'error', title: '错误', text: msg }),
+  text: (title: string, content: string) =>
+    Swal.fire({
+      icon: 'info',
+      title,
+      html: `<pre style="white-space:pre-wrap;text-align:left;max-height:60vh;overflow:auto;">${content
+        .replace(/[<>&]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s] as string))
+        }</pre>`,
+      confirmButtonText: '确定',
+      width: 900,
+    }),
+};
 
-function cls(...parts: (string | false | undefined)[]) {
-  return parts.filter(Boolean).join(' ');
-}
-
+/** 更健壮的 fetch：不自动跟随 302，且校验 content-type */
 async function fetchJSON<T = any>(input: RequestInfo | URL, init?: RequestInit) {
-  const res = await fetch(input, init);
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || `HTTP ${res.status}`);
+  const res = await fetch(input, {
+    cache: 'no-store',
+    redirect: 'manual',
+    headers: { Accept: 'application/json', ...(init?.headers || {}) },
+    ...init,
+  });
+
+  if (res.status === 302 || res.status === 401 || res.status === 403) {
+    throw new Error('未登录或无权限，请先在本站完成管理员登录后再重试。');
   }
+
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    const text = await res.text().catch(() => '');
+    throw new Error('接口返回非 JSON（可能被登录页/HTML拦截）：\n' + text.slice(0, 800));
+  }
+
   return (await res.json()) as T;
 }
 
+/** 卡片容器 */
+function Card(props: { title: string; subtitle?: string; children: React.ReactNode }) {
+  const { title, subtitle, children } = props;
+  return (
+    <div className="rounded-xl bg-white/80 dark:bg-gray-800/60 shadow-sm ring-1 ring-gray-200 dark:ring-gray-700 p-6">
+      <div className="mb-4">
+        <div className="text-lg font-semibold text-gray-900 dark:text-gray-100">{title}</div>
+        {subtitle ? (
+          <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{subtitle}</div>
+        ) : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+type ValidateItem = {
+  key: string;
+  name?: string;
+  ok: boolean;
+  message?: string;
+  latency?: number; // ms
+};
+
 export default function AdminToolsPage() {
-  // ---- 数据迁移与订阅 ----
+  /** —— 订阅配置 —— */
+  const [subUrl, setSubUrl] = useState('');
+  const [subPreview, setSubPreview] = useState<any | null>(null);
+  const [subLoading, setSubLoading] = useState<'fetch' | 'apply' | null>(null);
+
+  /** —— 源校验 —— */
+  const [validating, setValidating] = useState(false);
+  const [validateList, setValidateList] = useState<ValidateItem[]>([]);
+  const okCount = useMemo(() => validateList.filter(i => i.ok).length, [validateList]);
+
+  /** —— 日志 —— */
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logBusy, setLogBusy] = useState(false);
+  const logTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  /** —— 数据迁移 —— */
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const [subUrl, setSubUrl] = useState('');
-  const [subLoading, setSubLoading] = useState(false);
-  const [subPreview, setSubPreview] = useState<any | null>(null);
+  /** 页面提示：仅管理员可用 + Cloudflare Pages 兼容 */
+  const note = useMemo(
+    () => '仅管理员可用 · Cloudflare Pages 兼容',
+    []
+  );
 
-  // ---- 源校验 ----
-  const [validating, setValidating] = useState(false);
-  const [validateRows, setValidateRows] = useState<ValidateResult[]>([]);
-
-  // ---- 日志 ----
-  const [logs, setLogs] = useState<LogEvent[]>([]);
-  const [loadingLogs, setLoadingLogs] = useState(false);
-
-  // 从本地缓存恢复订阅地址
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('admin.tools.subscription.url');
-      if (saved) setSubUrl(saved);
-    } catch (e) {
-      console.debug('restore subscription url failed', e);
+  /** ------- 订阅：获取/应用 ------- */
+  const handleFetchSubscription = async () => {
+    if (!subUrl.trim()) {
+      toast.err('请先填写订阅地址');
+      return;
     }
-  }, []);
-
-  useEffect(() => {
     try {
-      if (subUrl) localStorage.setItem('admin.tools.subscription.url', subUrl);
-    } catch (e) {
-      console.debug('persist subscription url failed', e);
-    }
-  }, [subUrl]);
-
-  // ---------- 数据导出 ----------
-  const onExport = async () => {
-    try {
-      setExporting(true);
-      const res = await fetch('/api/admin/data_migration/export', {
-        cache: 'no-store',
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const json = await res.json();
-
-      const blob = new Blob([JSON.stringify(json, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `baotuo-export-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e: any) {
-      alert('导出失败：' + (e?.message || String(e)));
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  // ---------- 数据导入 ----------
-  const onImport = async (file?: File | null) => {
-    try {
-      const f = file || fileRef.current?.files?.[0];
-      if (!f) return;
-
-      setImporting(true);
-      const text = await f.text();
-      let payload: any;
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        throw new Error('导入文件不是合法的 JSON');
-      }
-
-      const res = await fetch('/api/admin/data_migration/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      alert('导入成功');
-    } catch (e: any) {
-      alert('导入失败：' + (e?.message || String(e)));
-    } finally {
-      setImporting(false);
-      if (fileRef.current) fileRef.current.value = '';
-    }
-  };
-
-  // ---------- 订阅获取 ----------
-  const onFetchSub = async () => {
-    if (!subUrl) return alert('请输入订阅地址');
-    try {
-      setSubLoading(true);
-      const data = await fetchJSON<any>(
-        `/api/admin/config_subscription/fetch?url=${encodeURIComponent(subUrl)}`,
-        { cache: 'no-store' }
-      );
+      setSubLoading('fetch');
+      const data = await fetchJSON<any>(`/api/admin/config_subscription/fetch?url=${encodeURIComponent(subUrl.trim())}`);
       setSubPreview(data);
-    } catch (e: any) {
-      alert('订阅获取失败：' + (e?.message || String(e)));
+      toast.ok('获取订阅成功');
+    } catch (e) {
+      toast.err(e instanceof Error ? e.message : '获取订阅失败');
     } finally {
-      setSubLoading(false);
+      setSubLoading(null);
     }
   };
 
-  // ---------- 订阅应用 ----------
-  const onApplySub = async () => {
-    if (!subPreview) return alert('请先获取订阅并确认内容');
+  const handleApplySubscription = async () => {
+    if (!subPreview) {
+      toast.err('请先获取订阅预览');
+      return;
+    }
     try {
-      setSubLoading(true);
-      const res = await fetch('/api/admin/config_subscription/apply', {
+      setSubLoading('apply');
+      const res = await fetchJSON<{ ok: boolean; message?: string }>(`/api/admin/config_subscription/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store',
         body: JSON.stringify(subPreview),
       });
-      if (!res.ok) throw new Error(await res.text());
-      alert('订阅配置已应用');
-    } catch (e: any) {
-      alert('订阅应用失败：' + (e?.message || String(e)));
+      if (res.ok) {
+        toast.ok('订阅已应用');
+      } else {
+        toast.err(res.message || '应用订阅失败');
+      }
+    } catch (e) {
+      toast.err(e instanceof Error ? e.message : '应用订阅失败');
     } finally {
-      setSubLoading(false);
+      setSubLoading(null);
     }
   };
 
-  // ---------- 源校验 ----------
-  const onValidate = async () => {
+  /** ------- 源校验 ------- */
+  const handleValidate = async () => {
     try {
       setValidating(true);
-      const data = await fetchJSON<ValidateResult[]>('/api/admin/source/validate', {
-        cache: 'no-store',
-      });
-      setValidateRows(data || []);
-    } catch (e: any) {
-      alert('源校验失败：' + (e?.message || String(e)));
+      setValidateList([]);
+      const data = await fetchJSON<{ items: ValidateItem[] }>(`/api/admin/source/validate`);
+      setValidateList(Array.isArray(data.items) ? data.items : []);
+      toast.ok('校验完成');
+    } catch (e) {
+      toast.err(e instanceof Error ? e.message : '校验失败');
     } finally {
       setValidating(false);
     }
   };
 
-  // ---------- 日志 ----------
-  const onReloadLogs = async () => {
-    setLoadingLogs(true);
+  /** ------- 日志：拉取/轮询 ------- */
+  const fetchLogs = useCallback(
+    async (silent = false) => {
+      try {
+        if (!silent) setLogBusy(true);
+        const data = await fetchJSON<{ lines: string[] }>(`/api/admin/logs?limit=200`);
+        setLogs(Array.isArray(data.lines) ? data.lines : []);
+      } catch (e) {
+        // 不弹 error，改为展示在模态里，避免把 HTML 淋到页面
+        toast.text(
+          `${location.host} 显示`,
+          `获取日志失败：\n${e instanceof Error ? e.message : '未知错误'}`
+        );
+      } finally {
+        if (!silent) setLogBusy(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    // 初次拉一次日志
+    fetchLogs(true).catch(() => undefined);
+    // 每 30s 刷新一次
+    logTimerRef.current = setInterval(() => fetchLogs(true), 30_000);
+    return () => {
+      if (logTimerRef.current) clearInterval(logTimerRef.current);
+    };
+  }, [fetchLogs]);
+
+  /** ------- 数据迁移：导出 ------- */
+  const handleExport = async () => {
     try {
-      const data = await fetchJSON<LogEvent[]>('/api/admin/logs?limit=200', {
-        cache: 'no-store',
-      });
-      setLogs(Array.isArray(data) ? data : []);
-    } catch (e: any) {
-      alert('获取日志失败：' + (e?.message || String(e)));
-      console.error(e);
+      setExporting(true);
+      // 返回 {fileName, content} 或 直接返回可下载的 JSON 字符串
+      const data = await fetchJSON<{ fileName?: string; content?: any; ok?: boolean; message?: string }>(
+        `/api/admin/data_migration/export`
+      );
+
+      const fileName = data.fileName || `baotuo-ys-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      const contentStr =
+        data && typeof data === 'object' && 'content' in data
+          ? JSON.stringify(data.content, null, 2)
+          : JSON.stringify(data, null, 2);
+
+      const blob = new Blob([contentStr], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.ok('已导出为 JSON');
+    } catch (e) {
+      toast.err(e instanceof Error ? e.message : '导出失败');
     } finally {
-      setLoadingLogs(false);
+      setExporting(false);
     }
   };
 
-  useEffect(() => {
-    // 避免空箭头函数，且对错误进行记录
-    (async () => {
+  /** ------- 数据迁移：导入 ------- */
+  const handleImport = async (file: File) => {
+    try {
+      setImporting(true);
+      const text = await file.text();
+      let json: any;
       try {
-        await onReloadLogs();
-      } catch (e) {
-        console.error('initial logs load failed', e);
+        json = JSON.parse(text);
+      } catch {
+        toast.err('文件不是有效的 JSON');
+        return;
       }
-    })();
-  }, []);
+      const res = await fetchJSON<{ ok: boolean; message?: string }>(`/api/admin/data_migration/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(json),
+      });
+      if (res.ok) {
+        toast.ok('导入成功');
+      } else {
+        toast.err(res.message || '导入失败');
+      }
+    } catch (e) {
+      toast.err(e instanceof Error ? e.message : '导入失败');
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   return (
-    <div className="mx-auto max-w-5xl p-6 space-y-8">
-      <header className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Admin 扩展工具</h1>
-        <p className="text-sm text-gray-500">仅管理员可用 · Cloudflare Pages 兼容</p>
-      </header>
-
-      {/* 1. 数据迁移与配置订阅 */}
-      <section className="rounded-lg border p-4 space-y-4">
-        <h2 className="text-xl font-medium">1. 数据迁移与配置订阅</h2>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={onExport}
-            disabled={exporting}
-            className={cls(
-              'px-4 py-2 rounded bg-black text-white',
-              exporting && 'opacity-60 cursor-not-allowed'
-            )}
-          >
-            {exporting ? '导出中…' : '导出数据'}
-          </button>
-
-          <label
-            className={cls(
-              'px-4 py-2 rounded border cursor-pointer',
-              importing ? 'bg-gray-200 text-gray-500 pointer-events-none' : 'bg-gray-100'
-            )}
-            title={importing ? '正在导入…' : '选择导入 JSON'}
-          >
-            选择导入 JSON {importing && <span className="ml-2 text-xs">(导入中…)</span>}
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              disabled={importing}
-              onChange={(e) => onImport(e.target.files?.[0])}
-            />
-          </label>
-
-          <div className="flex-1 min-w-[260px] flex items-center gap-2">
-            <input
-              type="url"
-              placeholder="订阅地址 https://…"
-              value={subUrl}
-              onChange={(e) => setSubUrl(e.target.value)}
-              className="flex-1 px-3 py-2 border rounded"
-            />
-            <button
-              onClick={onFetchSub}
-              disabled={subLoading || !subUrl}
-              className={cls(
-                'px-4 py-2 rounded bg-blue-600 text-white',
-                (!subUrl || subLoading) && 'opacity-60 cursor-not-allowed'
-              )}
-            >
-              {subLoading ? '获取中…' : '获取订阅'}
-            </button>
-            <button
-              onClick={onApplySub}
-              disabled={!subPreview || subLoading}
-              className={cls(
-                'px-4 py-2 rounded bg-green-600 text-white',
-                (!subPreview || subLoading) && 'opacity-60 cursor-not-allowed'
-              )}
-            >
-              应用订阅
-            </button>
-            {subPreview && (
-              <button
-                onClick={() => setSubPreview(null)}
-                className="px-3 py-2 rounded border bg-white"
-                title="清除预览"
-              >
-                清除
-              </button>
-            )}
-          </div>
-        </div>
-
-        {subPreview && (
-          <div className="mt-3">
-            <div className="text-sm text-gray-500 mb-1">订阅内容预览：</div>
-            <pre className="max-h-64 overflow-auto rounded bg-gray-50 p-3 text-sm border">
-              {JSON.stringify(subPreview, null, 2)}
-            </pre>
-          </div>
-        )}
-      </section>
-
-      {/* 2. 源校验 */}
-      <section className="rounded-lg border p-4 space-y-4">
-        <h2 className="text-xl font-medium">2. 源校验</h2>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onValidate}
-            disabled={validating}
-            className={cls(
-              'px-4 py-2 rounded bg-black text-white',
-              validating && 'opacity-60 cursor-not-allowed'
-            )}
-          >
-            {validating ? '校验中…' : '开始校验'}
-          </button>
-        </div>
-
-        {validateRows.length > 0 && (
-          <div className="overflow-auto">
-            <table className="mt-3 w-full border text-sm">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-2 py-1 border text-left">Key</th>
-                  <th className="px-2 py-1 border text-left">Name</th>
-                  <th className="px-2 py-1 border text-left">状态</th>
-                </tr>
-              </thead>
-              <tbody>
-                {validateRows.map((r) => (
-                  <tr key={r.key}>
-                    <td className="px-2 py-1 border">{r.key}</td>
-                    <td className="px-2 py-1 border">{r.name || '-'}</td>
-                    <td className="px-2 py-1 border">{r.status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* 3. 日志 */}
-      <section className="rounded-lg border p-4 space-y-4">
-        <h2 className="text-xl font-medium">3. 日志</h2>
-
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onReloadLogs}
-            disabled={loadingLogs}
-            className={cls(
-              'px-4 py-2 rounded bg-black text-white',
-              loadingLogs && 'opacity-60 cursor-not-allowed'
-            )}
-          >
-            {loadingLogs ? '刷新中…' : '刷新'}
-          </button>
-        </div>
-
-        <ul className="divide-y border rounded">
-          {logs.map((l, idx) => (
-            <li key={idx} className="p-2 text-sm">
-              <div className="text-gray-500">
-                {new Date(l.ts).toLocaleString()} • {l.type}
-              </div>
-              <div className="font-mono whitespace-pre-wrap break-all">{l.message}</div>
-              {l.extra ? (
-                <pre className="mt-1 bg-gray-50 p-2 rounded border">
-                  {JSON.stringify(l.extra, null, 2)}
-                </pre>
-              ) : null}
-            </li>
-          ))}
-          {logs.length === 0 && !loadingLogs && (
-            <li className="p-3 text-sm text-gray-500">暂无日志</li>
-          )}
-        </ul>
-      </section>
-
-      <footer className="pt-2 text-xs text-gray-500">
-        提示：若遇到“未登录/无权限”，请先在同域名下完成管理员登录再访问本页。
-      </footer>
-    </div>
-  );
-}
+    <PageLayout activePath="/admin">
+      <div className="px-2 sm:px-10 py-4 sm:py-8">
+        <div className="max-w-[1000px] mx-auto">
+          <div className="mb-6">
+            <h1 className="text-2xl font-bold te
