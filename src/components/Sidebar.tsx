@@ -136,6 +136,16 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
       href: '/douban?type=tv',
     },
     {
+      icon: Tv,
+      label: '短剧',
+      href: '/douban?type=short_drama',
+    },
+    {
+      icon: Tv,
+      label: '动漫',
+      href: '/douban?type=anime',
+    },
+    {
       icon: Clover,
       label: '综艺',
       href: '/douban?type=show',
@@ -239,7 +249,7 @@ const Sidebar = ({ onToggle, activePath = '/' }: SidebarProps) => {
               <div className='space-y-1'>
                 {menuItems.map((item) => {
                   // 检查当前路径是否匹配这个菜单项
-                  const typeMatch = item.href.match(/type=([^&]+)/)?.[1];
+                  const typeMatch = item.href.match(/type=([^&]+)/)?.;
 
                   // 解码URL以进行正确的比较
                   const decodedActive = decodeURIComponent(active);
