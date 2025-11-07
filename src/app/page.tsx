@@ -19,11 +19,45 @@ import { getDoubanCategories, getDoubanList } from '@/lib/douban.client';
 import { DoubanItem } from '@/lib/types';
 
 // UI 组件
-import CapsuleSwitch from '@/components/CapsuleSwitch';
+// 注意：这里不再使用项目里的 CapsuleSwitch，避免 props 不匹配导致类型错误
 import ContinueWatching from '@/components/ContinueWatching';
 import PageLayout from '@/components/PageLayout';
 import ScrollableRow from '@/components/ScrollableRow';
 import VideoCard from '@/components/VideoCard';
+
+// 本文件内的简易胶囊切换，替代 CapsuleSwitch，避免类型不兼容
+function SimpleCapsuleSwitch(props: {
+  value: 'home' | 'favorites';
+  onChange: (val: 'home' | 'favorites') => void;
+}) {
+  const { value, onChange } = props;
+  const tabs: Array<{ label: string; value: 'home' | 'favorites' }> = [
+    { label: '首页', value: 'home' },
+    { label: '收藏夹', value: 'favorites' },
+  ];
+  return (
+    <div className="inline-flex rounded-full bg-gray-100 p-1 dark:bg-gray-800">
+      {tabs.map((t) => {
+        const active = t.value === value;
+        return (
+          <button
+            key={t.value}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(t.value)}
+            className={`px-3 py-1 text-sm rounded-full transition-colors ${
+              active
+                ? 'bg-white text-gray-900 shadow dark:bg-black dark:text-gray-100'
+                : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 type FavoriteItem = {
   id: string;
@@ -199,14 +233,7 @@ function HomeClient() {
       {/* 顶部切换 */}
       <div className='sticky top-0 z-10 bg-white/80 backdrop-blur md:relative md:bg-transparent md:backdrop-blur-none dark:bg-black/80 md:dark:bg-transparent'>
         <div className='max-w-[95%] mx-auto py-2'>
-          <CapsuleSwitch
-            tabs={[
-              { label: '首页', value: 'home' },
-              { label: '收藏夹', value: 'favorites' },
-            ]}
-            value={activeTab}
-            onChange={(value) => setActiveTab(value as 'home' | 'favorites')}
-          />
+          <SimpleCapsuleSwitch value={activeTab} onChange={(v) => setActiveTab(v)} />
         </div>
       </div>
 
