@@ -2,7 +2,16 @@
 
 'use client';
 
-import { Clover, Film, Home, Search, Star, Tv } from 'lucide-react';
+import {
+  Clover,
+  Film,
+  Home,
+  Search,
+  Star,
+  Tv,
+  Clapperboard,
+  FilmIcon,
+} from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -20,6 +29,7 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
   // 当前激活路径：优先使用传入的 activePath，否则回退到浏览器地址
   const currentActive = activePath ?? pathname;
 
+  // ✅ 定义底部导航项目（包含短剧和动漫）
   const [navItems, setNavItems] = useState([
     { icon: Home, label: '首页', href: '/' },
     { icon: Search, label: '搜索', href: '/search' },
@@ -34,12 +44,23 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
       href: '/douban?type=tv',
     },
     {
+      icon: Clapperboard,
+      label: '短剧',
+      href: '/douban?type=short_drama',
+    },
+    {
+      icon: FilmIcon,
+      label: '动漫',
+      href: '/douban?type=anime',
+    },
+    {
       icon: Clover,
       label: '综艺',
       href: '/douban?type=show',
     },
   ]);
 
+  // ✅ 动态追加自定义分类
   useEffect(() => {
     const runtimeConfig = (window as any).RUNTIME_CONFIG;
     if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
@@ -54,15 +75,14 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     }
   }, []);
 
+  // ✅ 判断当前是否激活
   const isActive = (href: string) => {
     const typeMatch = href.match(/type=([^&]+)/)?.[1];
-
-    // 解码URL以进行正确的比较
     const decodedActive = decodeURIComponent(currentActive);
-    const decodedItemHref = decodeURIComponent(href);
+    const decodedHref = decodeURIComponent(href);
 
     return (
-      decodedActive === decodedItemHref ||
+      decodedActive === decodedHref ||
       (decodedActive.startsWith('/douban') &&
         decodedActive.includes(`type=${typeMatch}`))
     );
@@ -72,24 +92,23 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
     <nav
       className='md:hidden fixed left-0 right-0 z-[600] bg-white/90 backdrop-blur-xl border-t border-gray-200/50 overflow-hidden dark:bg-gray-900/80 dark:border-gray-700/50'
       style={{
-        /* 紧贴视口底部，同时在内部留出安全区高度 */
         bottom: 0,
         paddingBottom: 'env(safe-area-inset-bottom)',
         minHeight: 'calc(3.5rem + env(safe-area-inset-bottom))',
       }}
     >
-      <ul className='flex items-center overflow-x-auto scrollbar-hide'>
+      <ul className='flex items-center justify-between overflow-x-auto scrollbar-hide'>
         {navItems.map((item) => {
           const active = isActive(item.href);
           return (
             <li
               key={item.href}
               className='flex-shrink-0'
-              style={{ width: '20vw', minWidth: '20vw' }}
+              style={{ width: `${100 / navItems.length}vw`, minWidth: '64px' }}
             >
               <Link
                 href={item.href}
-                className='flex flex-col items-center justify-center w-full h-14 gap-1 text-xs'
+                className='flex flex-col items-center justify-center w-full h-14 gap-1 text-xs transition-colors duration-150'
               >
                 <item.icon
                   className={`h-6 w-6 ${
@@ -99,11 +118,11 @@ const MobileBottomNav = ({ activePath }: MobileBottomNavProps) => {
                   }`}
                 />
                 <span
-                  className={
+                  className={`${
                     active
-                      ? 'text-green-600 dark:text-green-400'
+                      ? 'text-green-600 dark:text-green-400 font-medium'
                       : 'text-gray-600 dark:text-gray-300'
-                  }
+                  }`}
                 >
                   {item.label}
                 </span>
