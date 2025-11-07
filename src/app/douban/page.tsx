@@ -125,8 +125,8 @@ function DoubanPageClient() {
   // 生成API请求参数的辅助函数
   const getRequestParams = useCallback(
     (pageStart: number) => {
-      // 当type为tv或show时，kind统一为'tv'，category使用type本身
-      if (type === 'tv' || type === 'show') {
+      // 当type为tv、short_drama、anime或show时，kind统一为'tv'，category使用type本身
+      if (type === 'tv' || type === 'show' || type === 'short_drama' || type === 'anime') {
         return {
           kind: 'tv' as const,
           category: type,
