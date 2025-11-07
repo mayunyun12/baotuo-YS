@@ -43,7 +43,6 @@ function DoubanPageClient() {
     return '全部';
   });
 
-  // 获取自定义分类数据
   useEffect(() => {
     const runtimeConfig = (window as any).RUNTIME_CONFIG;
     if (runtimeConfig?.CUSTOM_CATEGORIES?.length > 0) {
@@ -51,14 +50,13 @@ function DoubanPageClient() {
     }
   }, []);
 
-  // 监听 type 或自定义分类变化，重置选择器
   useEffect(() => {
     setSelectorsReady(false);
     setLoading(true);
 
     if (type === 'custom' && customCategories.length > 0) {
       const types = Array.from(new Set(customCategories.map((cat) => cat.type)));
-      let selectedType = types.includes('movie') ? 'movie' : types[0] || 'tv';
+      const selectedType = types.includes('movie') ? 'movie' : types[0] || 'tv'; // ✅ 改成 const
       setPrimarySelection(selectedType);
 
       const firstCategory = customCategories.find(
@@ -115,7 +113,6 @@ function DoubanPageClient() {
     [type, primarySelection, secondarySelection]
   );
 
-  // 加载初始数据
   const loadInitialData = useCallback(async () => {
     try {
       setLoading(true);
@@ -150,7 +147,6 @@ function DoubanPageClient() {
     }
   }, [type, primarySelection, secondarySelection, getRequestParams, customCategories]);
 
-  // 当选择器准备好时加载
   useEffect(() => {
     if (!selectorsReady) return;
 
@@ -170,7 +166,6 @@ function DoubanPageClient() {
     };
   }, [selectorsReady, type, primarySelection, secondarySelection, loadInitialData]);
 
-  // 滚动加载更多
   useEffect(() => {
     if (currentPage > 0) {
       const fetchMoreData = async () => {
@@ -213,7 +208,6 @@ function DoubanPageClient() {
     }
   }, [currentPage, type, primarySelection, secondarySelection, customCategories]);
 
-  // 设置滚动监听
   useEffect(() => {
     if (!hasMore || isLoadingMore || loading) return;
     if (!loadingRef.current) return;
@@ -232,7 +226,6 @@ function DoubanPageClient() {
     return () => observer.disconnect();
   }, [hasMore, isLoadingMore, loading]);
 
-  // 处理选择变化
   const handlePrimaryChange = useCallback(
     (value: string) => {
       if (value !== primarySelection) {
@@ -261,20 +254,13 @@ function DoubanPageClient() {
 
   const getPageTitle = () => {
     switch (type) {
-      case 'movie':
-        return '电影';
-      case 'tv':
-        return '电视剧';
-      case 'short_drama':
-        return '短剧';
-      case 'anime':
-        return '动漫';
-      case 'show':
-        return '综艺';
-      case 'custom':
-        return '自定义';
-      default:
-        return '精选';
+      case 'movie': return '电影';
+      case 'tv': return '电视剧';
+      case 'short_drama': return '短剧';
+      case 'anime': return '动漫';
+      case 'show': return '综艺';
+      case 'custom': return '自定义';
+      default: return '精选';
     }
   };
 
@@ -288,7 +274,6 @@ function DoubanPageClient() {
   return (
     <PageLayout activePath={getActivePath()}>
       <div className="px-4 sm:px-10 py-4 sm:py-8 overflow-visible">
-        {/* 页面标题和选择器 */}
         <div className="mb-6 sm:mb-8 space-y-4 sm:space-y-6">
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-gray-800 mb-1 sm:mb-2 dark:text-gray-200">
@@ -322,7 +307,6 @@ function DoubanPageClient() {
           )}
         </div>
 
-        {/* 内容展示区域 */}
         <div className="max-w-[95%] mx-auto mt-8 overflow-visible">
           <div className="justify-start grid grid-cols-3 gap-x-2 gap-y-12 px-0 sm:px-2 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))] sm:gap-x-8 sm:gap-y-20">
             {loading || !selectorsReady
@@ -342,7 +326,6 @@ function DoubanPageClient() {
                 ))}
           </div>
 
-          {/* 加载更多 */}
           {hasMore && !loading && (
             <div
               ref={(el) => {
