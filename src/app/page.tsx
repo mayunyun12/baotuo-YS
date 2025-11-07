@@ -123,7 +123,7 @@ function HomeClient() {
 
   // 初始化收藏 + 订阅（修复：subscribeToDataUpdates 需要 event + callback）
   useEffect(() => {
-    const unsubs: Array<(() => void) | null> = [];
+    const unsubs: Array<() => void> = [];
 
     const init = async () => {
       try {
@@ -136,13 +136,15 @@ function HomeClient() {
 
         favEvents.forEach((evt) => {
           try {
-            const off = subscribeToDataUpdates(
+            const offAny = subscribeToDataUpdates(
               evt as any,
               (favorites: Record<string, any>) => {
                 void updateFavoriteItems(favorites);
               }
             );
-            unsubs.push(off);
+            if (typeof offAny === 'function') {
+              unsubs.push(offAny as () => void);
+            }
           } catch (e) {
             // 某些实现若不支持该事件名，直接忽略
             console.warn(`订阅事件失败（${evt}）：`, e);
@@ -151,11 +153,13 @@ function HomeClient() {
 
         playEvents.forEach((evt) => {
           try {
-            const off = subscribeToDataUpdates(evt as any, () => {
+            const offAny = subscribeToDataUpdates(evt as any, () => {
               // 播放记录更新后，刷新收藏卡片上的进度
               getAllFavorites().then(updateFavoriteItems).catch(console.error);
             });
-            unsubs.push(off);
+            if (typeof offAny === 'function') {
+              unsubs.push(offAny as () => void);
+            }
           } catch (e) {
             console.warn(`订阅事件失败（${evt}）：`, e);
           }
@@ -171,7 +175,7 @@ function HomeClient() {
       // 统一清理
       unsubs.forEach((fn) => {
         try {
-          fn && fn();
+          fn();
         } catch {
           // ignore
         }
@@ -181,11 +185,10 @@ function HomeClient() {
 
   const handleClearFavorites = async () => {
     try {
-      const result = await clearAllFavorites();
-      if (result) {
-        setFavoriteItems([]);
-        console.log('已清空收藏夹');
-      }
+      // 某些实现返回 Promise<void>，不能做真假判断
+      await clearAllFavorites();
+      setFavoriteItems([]);
+      console.log('已清空收藏夹');
     } catch (err) {
       console.error('清空收藏夹失败:', err);
     }
