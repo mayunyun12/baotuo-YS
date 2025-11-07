@@ -6,106 +6,83 @@ import { ChevronRight } from 'lucide-react';
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
 
-// 客户端收藏 API
+// 本地数据与订阅
 import {
   clearAllFavorites,
   getAllFavorites,
   getAllPlayRecords,
   subscribeToDataUpdates,
 } from '@/lib/db.client';
+
+// 豆瓣数据
 import { getDoubanCategories, getDoubanList } from '@/lib/douban.client';
 import { DoubanItem } from '@/lib/types';
 
+// UI 组件
 import CapsuleSwitch from '@/components/CapsuleSwitch';
 import ContinueWatching from '@/components/ContinueWatching';
 import PageLayout from '@/components/PageLayout';
 import ScrollableRow from '@/components/ScrollableRow';
-import { useSite } from '@/components/SiteProvider';
 import VideoCard from '@/components/VideoCard';
+
+type FavoriteItem = {
+  id: string;
+  source: string;
+  title: string;
+  poster: string;
+  episodes: number;
+  source_name: string;
+  currentEpisode?: number;
+  search_title?: string;
+};
 
 function HomeClient() {
   const [activeTab, setActiveTab] = useState<'home' | 'favorites'>('home');
+
+  // 首页三大分区
   const [hotMovies, setHotMovies] = useState<DoubanItem[]>([]);
   const [hotTvShows, setHotTvShows] = useState<DoubanItem[]>([]);
   const [hotVarietyShows, setHotVarietyShows] = useState<DoubanItem[]>([]);
 
-  // 新增：已有 animeList / shortDramaList 状态（沿用你文件里的命名）
-  const [animeList, setAnimeList] = useState<any[]>([]);
-  const [shortDramaList, setShortDramaList] = useState<any[]>([]);
+  // 新增：动漫/短剧
+  const [animeList, setAnimeList] = useState<DoubanItem[]>([]);
+  const [shortDramaList, setShortDramaList] = useState<DoubanItem[]>([]);
 
   const [loading, setLoading] = useState(true);
 
-  // SiteProvider 中的全局公告
-  const { siteName, announcement } = useSite();
-
-  const [showAnnouncement, setShowAnnouncement] = useState(false);
-
-  // 初始化公告弹窗的显示状态
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const localStorage = window.localStorage;
-      const hasSeenAnnouncement = localStorage.getItem('hasSeenAnnouncement');
-      if (hasSeenAnnouncement !== announcement) {
-        setShowAnnouncement(true);
-      } else {
-        setShowAnnouncement(Boolean(!hasSeenAnnouncement && announcement));
-      }
-    }
-  }, [announcement]);
-
-  // 收藏夹数据
-  type FavoriteItem = {
-    id: string;
-    source: string;
-    title: string;
-    poster: string;
-    episodes: number;
-    source_name: string;
-    currentEpisode?: number;
-    search_title?: string;
-  };
-
+  // 收藏视图
   const [favoriteItems, setFavoriteItems] = useState<FavoriteItem[]>([]);
 
+  // 拉取豆瓣首页数据
   useEffect(() => {
     const fetchDoubanData = async () => {
       try {
         setLoading(true);
 
-        // 并行获取热门电影、热门剧集、热门综艺 + 动漫 + 短剧
-        const [moviesData, tvShowsData, varietyShowsData, animeData, shortDramaData] = await Promise.all([
-          getDoubanCategories({
-            kind: 'movie',
-            category: '热门',
-            type: '全部',
-          }),
+        const [
+          moviesData,
+          tvShowsData,
+          varietyShowsData,
+          animeData,
+          shortDramaData,
+        ] = await Promise.all([
+          // 电影
+          getDoubanCategories({ kind: 'movie', category: '热门', type: '全部' }),
+          // 剧集
           getDoubanCategories({ kind: 'tv', category: 'tv', type: 'tv' }),
+          // 综艺
           getDoubanCategories({ kind: 'tv', category: 'show', type: 'show' }),
-          // 动漫（豆瓣内置 tv_animation）
+          // 动漫（豆瓣内置二级：tv_animation）
           getDoubanCategories({ kind: 'tv', category: 'tv', type: 'tv_animation' }),
-          // 短剧（标签检索）
+          // 短剧（使用标签检索）
           getDoubanList({ tag: '短剧', type: 'tv', pageStart: 0, pageLimit: 25 }),
         ]);
 
-        if (moviesData.code === 200) {
-          setHotMovies(moviesData.list);
-        }
-
-        if (tvShowsData.code === 200) {
-          setHotTvShows(tvShowsData.list);
-        }
-
-        if (varietyShowsData.code === 200) {
-          setHotVarietyShows(varietyShowsData.list);
-        }
-
-        if (animeData.code === 200) {
-          setAnimeList(animeData.list);
-        }
-
-        if (shortDramaData.code === 200) {
-          setShortDramaList(shortDramaData.list);
-        }
+        if (moviesData?.code === 200) setHotMovies(moviesData.list);
+        if (tvShowsData?.code === 200) setHotTvShows(tvShowsData.list);
+        if (varietyShowsData?.code === 200) setHotVarietyShows(varietyShowsData.list);
+        if (animeData?.code === 200) setAnimeList(animeData.list);
+        if (shortDramaData?.code === 200) setShortDramaList(shortDramaData.list);
       } catch (error) {
         console.error('获取豆瓣数据失败:', error);
       } finally {
@@ -116,19 +93,16 @@ function HomeClient() {
     fetchDoubanData();
   }, []);
 
-  // 处理收藏数据更新的函数
+  // 将收藏 Map 整理为卡片数据（含“继续观看”的当前集）
   const updateFavoriteItems = async (allFavorites: Record<string, any>) => {
     const allPlayRecords = await getAllPlayRecords();
 
-    // 根据保存时间排序（从近到远）
     const sorted = Object.entries(allFavorites)
-      .sort(([, a], [, b]) => b.save_time - a.save_time)
-      .map(([key, fav]) => {
+      .sort(([, a], [, b]) => (b as any).save_time - (a as any).save_time)
+      .map(([key, fav]: [string, any]) => {
         const plusIndex = key.indexOf('+');
         const source = key.slice(0, plusIndex);
         const id = key.slice(plusIndex + 1);
-
-        // 查找对应的播放记录，获取当前集数
         const playRecord = allPlayRecords[key];
         const currentEpisode = playRecord?.index;
 
@@ -141,25 +115,49 @@ function HomeClient() {
           source_name: fav.from || '',
           currentEpisode,
           search_title: fav.search_title,
-        };
+        } as FavoriteItem;
       });
 
-    setFavoriteItems(sorted as FavoriteItem[]);
+    setFavoriteItems(sorted);
   };
 
-  // 初始化收藏夹数据 + 订阅收藏/进度变更
+  // 初始化收藏 + 订阅（修复：subscribeToDataUpdates 需要 event + callback）
   useEffect(() => {
-    let unsubscribe: (() => void) | null = null;
+    const unsubs: Array<(() => void) | null> = [];
 
     const init = async () => {
       try {
         const data = await getAllFavorites();
         await updateFavoriteItems(data);
 
-        unsubscribe = subscribeToDataUpdates(async (payload) => {
-          if (payload.type === 'collectionsUpdated' || payload.type === 'playRecordUpdated') {
-            const latestFavorites = await getAllFavorites();
-            await updateFavoriteItems(latestFavorites);
+        // 兼容不同项目里常见的事件名写法（有的复数、有的没有）
+        const favEvents = ['favoritesUpdated', 'collectionsUpdated'] as const;
+        const playEvents = ['playRecordsUpdated', 'playRecordUpdated'] as const;
+
+        favEvents.forEach((evt) => {
+          try {
+            const off = subscribeToDataUpdates(
+              evt as any,
+              (favorites: Record<string, any>) => {
+                void updateFavoriteItems(favorites);
+              }
+            );
+            unsubs.push(off);
+          } catch (e) {
+            // 某些实现若不支持该事件名，直接忽略
+            console.warn(`订阅事件失败（${evt}）：`, e);
+          }
+        });
+
+        playEvents.forEach((evt) => {
+          try {
+            const off = subscribeToDataUpdates(evt as any, () => {
+              // 播放记录更新后，刷新收藏卡片上的进度
+              getAllFavorites().then(updateFavoriteItems).catch(console.error);
+            });
+            unsubs.push(off);
+          } catch (e) {
+            console.warn(`订阅事件失败（${evt}）：`, e);
           }
         });
       } catch (err) {
@@ -167,10 +165,17 @@ function HomeClient() {
       }
     };
 
-    init();
+    void init();
 
     return () => {
-      if (unsubscribe) unsubscribe();
+      // 统一清理
+      unsubs.forEach((fn) => {
+        try {
+          fn && fn();
+        } catch {
+          // ignore
+        }
+      });
     };
   }, []);
 
@@ -257,8 +262,7 @@ function HomeClient() {
               </div>
               <ScrollableRow>
                 {loading
-                  ? // 加载状态显示灰色占位数据
-                    Array.from({ length: 8 }).map((_, index) => (
+                  ? Array.from({ length: 8 }).map((_, index) => (
                       <div key={index} className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'>
                         <div className='relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-gray-200 animate-pulse dark:bg-gray-800'>
                           <div className='absolute inset-0 bg-gray-300 dark:bg-gray-700'></div>
@@ -266,8 +270,7 @@ function HomeClient() {
                         <div className='mt-2 h-4 bg-gray-200 rounded animate-pulse dark:bg-gray-800'></div>
                       </div>
                     ))
-                  : // 显示真实数据
-                    hotMovies.map((movie, index) => (
+                  : hotMovies.map((movie, index) => (
                       <div key={index} className='min-w-[96px] w-24 sm:min-w-[180px] sm:w-44'>
                         <VideoCard
                           from='douban'
