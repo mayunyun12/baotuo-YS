@@ -56,7 +56,7 @@ function DoubanPageClient() {
 
     if (type === 'custom' && customCategories.length > 0) {
       const types = Array.from(new Set(customCategories.map((cat) => cat.type)));
-      const selectedType = types.includes('movie') ? 'movie' : types[0] || 'tv'; // ✅ 改成 const
+      const selectedType = types.includes('movie') ? 'movie' : types[0] || 'tv';
       setPrimarySelection(selectedType);
 
       const firstCategory = customCategories.find(
@@ -284,10 +284,15 @@ function DoubanPageClient() {
             </p>
           </div>
 
-          {type !== 'custom' ? (
+          {/* ✅ 让短剧/动漫也显示分类筛选器 */}
+          {['movie', 'tv', 'show', 'short_drama', 'anime'].includes(type) ? (
             <div className="bg-white/60 dark:bg-gray-800/40 rounded-2xl p-4 sm:p-6 border border-gray-200/30 dark:border-gray-700/30 backdrop-blur-sm">
               <DoubanSelector
-                type={type as 'movie' | 'tv' | 'show'}
+                type={
+                  type === 'short_drama' || type === 'anime'
+                    ? 'tv'
+                    : (type as 'movie' | 'tv' | 'show')
+                }
                 primarySelection={primarySelection}
                 secondarySelection={secondarySelection}
                 onPrimaryChange={handlePrimaryChange}
